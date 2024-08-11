@@ -1,7 +1,7 @@
 # TODO_IN_CLI
 All the todos will be stored in todos table inside mydatabase.db
 
-Run the surrealdb server first:
+Run the surrealdb server first:\
 surreal start --auth file:mydatabase.db
 
 By default, surrealdb server will be running in localhost:8000.
