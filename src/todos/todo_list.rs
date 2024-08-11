@@ -1,108 +1,96 @@
-use std::{fs, mem};
-use serde_json;
 use easy_sgr_macros::sgr;
+use surrealdb::{engine::remote::ws::Client, opt::PatchOp, Surreal};
 
 use super::todo::Todo;
 
 #[derive(Debug)]
-pub struct TodoList {
-    pub path: String,
-    contents: String,
-    pub todos: Vec<Todo>
+pub struct TodoList<'a> {
+    db: Surreal<Client>,
+    table_name: &'a str,
+    pub todos: Vec<Todo>,
 }
 
-impl TodoList {
-    fn write_to_file_back(&self) {
-        let stringified_todos = serde_json::to_string_pretty(&self.todos).unwrap();
-
-        fs::write(&self.path, stringified_todos).expect("Failed to create file");
-    }
-
-    pub fn parse_contents_to_vec_todos(&mut self) {
-        self.todos = serde_json::from_str(self.contents.as_str()).unwrap();
-    }
-
-    pub fn add_todos(&mut self, parameters: Vec<String>) {
+impl<'a> TodoList<'a> {
+    pub async fn add_todos(&mut self, parameters: Vec<String>) -> surrealdb::Result<()> {
+        let mut new_todos: Vec<Todo> = Vec::new();
         for param in parameters {
             let new_todo = Todo {
+                task_id: Option::None,
                 task_name: param.to_string(),
                 done_status: false
             };
 
-            self.todos.push(new_todo);
+            new_todos.push(new_todo);
         }
 
-        self.write_to_file_back();
+        // Create a new todo with a random id
+        let created: Vec<Todo> = self.db
+            .insert(self.table_name)
+            .content(new_todos).await?;
+
+        println!("{:?}", created);
+
+        Ok(())
     }
 
-    pub fn display_todos(&self) {
+    pub async fn display_todos(&mut self) -> surrealdb::Result<()> {
         println!("Todos List:");
+        self.todos = self.db.select(self.table_name).await?;
+
         for (i,todo) in self.todos.iter().enumerate() {
             if todo.done_status {
                 let striked_task = sgr!("{[strike]}").to_owned() + todo.task_name.as_str() + sgr!("{[]}");
-                println!("{} {}", i, striked_task);
+                println!("{} {} id: {}", i, striked_task, todo.task_id.as_ref().unwrap());
             }
             else {
-                println!("{} {}", i, todo.task_name);
+                println!("{} {} id: {}", i, todo.task_name, todo.task_id.as_ref().unwrap());
             }
         }
+
+        Ok(())
     }
 
-    pub fn mark_todos_done(&mut self, parameters: Vec<String>) {
+    pub async fn mark_todos_done(&mut self, parameters: Vec<String>) -> surrealdb::Result<()> {
         for param in parameters {
-            let param_str = param.as_str();
-            let param_index = param_str.parse::<usize>().unwrap();
-            let _ = mem::replace(&mut self.todos[param_index].done_status, true);
+            let param_parts: Vec<&str> = param.split(":").collect();
+
+            let selected: Option<Todo> = self.db.select((param_parts[0], param_parts[1])).await?;
+
+            let mut _updated: Option<Todo> = self.db.update((param_parts[0], param_parts[1])).content(Todo {
+                task_id: selected.clone().unwrap().task_id,
+                task_name: selected.clone().unwrap().task_name,
+                done_status: true
+            }).await?;
         }
 
-        self.write_to_file_back();
+        Ok(())
     }
 
-    pub fn mark_todos_undone(&mut self, parameters: Vec<String>) {
+    pub async fn mark_todos_undone(&mut self, parameters: Vec<String>) -> surrealdb::Result<()> {
         for param in parameters {
-            let param_str = param.as_str();
-            let param_index = param_str.parse::<usize>().unwrap();
-            let _ = mem::replace(&mut self.todos[param_index].done_status, false);
+            let param_parts: Vec<&str> = param.split(":").collect();
+
+            // update can be done using pathc operation as well
+            let _updated: Option<Todo> = self.db.update((param_parts[0], param_parts[1]))
+                .patch(PatchOp::replace("/doneStatus", false))
+                .await?;
         }
 
-        self.write_to_file_back();
+        Ok(())
     }
 
-    pub fn remove_todos(&mut self, parameters: Vec<String>) {
+    pub async fn remove_todos(&mut self, parameters: Vec<String>) -> surrealdb::Result<()> {
         for param in parameters {
-            let param_str = param.as_str();
-            let param_index = param_str.parse::<usize>().unwrap();
-            self.todos.remove(param_index);
+            let param_parts: Vec<&str> = param.split(":").collect();
+            let _deleted: Option<Todo> = self.db.delete((param_parts[0], param_parts[1])).await?;
         }
 
-        self.write_to_file_back();
+        Ok(())
     }
 }
 
-pub fn create_or_load_instance() -> TodoList {
-    let json_file_path = env!("JSON_FILE_PATH");
-
-    let mut todo_list = TodoList {
-        path: json_file_path.to_string(),
-        contents: String::from(""),
-        todos: Vec::new()
-    };
-
-    let contents = fs::read_to_string(json_file_path).unwrap_or("".to_string());
-
-    if contents == "" {
-        match fs::File::open(json_file_path) {
-            Ok(_file) => println!("{json_file_path} file is present but no content"),
-            Err(_err) => {
-                eprintln!("No {} file found. Creating one now..", json_file_path);
-                fs::write(json_file_path, "").expect("Failed to create file");
-            }
-        }
-    }
-    else {
-        todo_list.contents = contents;
-        todo_list.parse_contents_to_vec_todos();
-    }
+pub fn create_or_load_instance(db: Surreal<Client>) -> TodoList<'static> {
+    let todo_list = TodoList { db, table_name: env!("SURREALDB_TABLENAME"), todos: Vec::new() };
 
     todo_list
 }
