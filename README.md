@@ -1,4 +1,4 @@
-# TODO_IN_CLI
+# TODO_IN_CLI_USING_SURREALDB
 All the todos will be stored in todos table inside mydatabase.db
 
 Run the surrealdb server first:\
